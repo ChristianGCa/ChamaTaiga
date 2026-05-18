@@ -48,7 +48,7 @@ public class WebhookController {
      */
     @PostMapping(value = "/glpi", consumes = {MediaType.APPLICATION_JSON_VALUE, MediaType.APPLICATION_OCTET_STREAM_VALUE})
     public ResponseEntity<String> receiveWebhookGlpi(@RequestBody GlpiWebhookPayload payload) {
-        log.info("ROTA /glpi - Payload recebido");
+        log.debug("ROTA /glpi - Payload recebido");
 
         if (payload == null || payload.item() == null) {
             log.warn("ROTA /glpi - Payload inválido: item ausente.");
@@ -77,7 +77,7 @@ public class WebhookController {
      */
     @PostMapping("/taiga")
     public ResponseEntity<String> receiveWebhookTaiga(@RequestBody(required = false) TaigaWebhookPayload payload) {
-        log.info("ROTA /taiga - Payload recebido");
+        log.debug("ROTA /taiga - Payload recebido");
 
         if (payload == null || payload.data() == null) {
             log.warn("ROTA /taiga - Payload inválido: data ausente.");

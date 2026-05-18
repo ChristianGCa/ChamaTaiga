@@ -85,6 +85,10 @@ security:
       #- ${WEBHOOK_ALLOWED_IP_TAIGA}
 
 logging:
+  level:
+    com:
+      chris:
+        glpi_taiga_integration: DEBUG
   integration:
     # Local onde o arquivo de log de falhas de integração será salvo
     failure-file: integration_failures.log
