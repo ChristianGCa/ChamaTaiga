@@ -16,19 +16,23 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+/**
+ * Serviço centralizador da integração bidirecional entre GLPI e Taiga.
+ * Gerencia o fluxo de criação de issues e sincronização de progresso via Webhooks.
+ */
 @Service
 public class IntegrationService {
 
     private static final Logger log = LoggerFactory.getLogger(IntegrationService.class);
     private static final String ID_TAIGA_NULL = "0";
     private static final String CONFIG_WILDCARD = "*";
-    // Variável de quantidade de locks para concorrência
     private static final int LOCK_STRIPES = 64;
 
     private final TaigaIntegrationService taigaIntegrationService;
     private final GlpiIntegrationService glpiIntegrationService;
     private final ProjectRoutingService projectRoutingService;
 
+    /** Lock listrado para mitigar concorrência local baseada no ID do ticket. */
     private final Object[] locks = new Object[LOCK_STRIPES];
 
     @Value("${glpi.api.category-that-send-to-taiga:}")
@@ -40,6 +44,9 @@ public class IntegrationService {
     @Value("${integration.auth.max-retries:1}")
     private int maxAuthRetries;
 
+    /**
+     * Construtor da classe. Inicializa as dependências e a estrutura de travas locais.
+     */
     public IntegrationService(
             TaigaIntegrationService taigaIntegrationService,
             GlpiIntegrationService glpiIntegrationService,
@@ -55,6 +62,12 @@ public class IntegrationService {
 
     // GLPI Webhook
 
+    /**
+     * Processa os payloads recebidos do webhook do GLPI.
+     * Filtra tickets elegíveis e aplica concorrência isolada por ID.
+     *
+     * @param payload Dados enviados pelo gatilho do GLPI.
+     */
     public void processGlpiWebhook(GlpiWebhookPayload payload) {
         GlpiItem item = payload.item();
 
@@ -71,6 +84,9 @@ public class IntegrationService {
         }
     }
 
+    /**
+     * Executa o fluxo de webhook do GLPI sob a política de repetição de autenticação.
+     */
     private void processGlpiWebhookWithRetry(GlpiItem item, Long ticketId) {
         withAuthRetry(new Runnable() {
             @Override
@@ -80,6 +96,9 @@ public class IntegrationService {
         });
     }
 
+    /**
+     * Registra em log os motivos de um ticket do GLPI ter sido ignorado pela integração.
+     */
     private void logIgnoredTicket(GlpiItem item) {
         String category = "";
 
@@ -94,11 +113,16 @@ public class IntegrationService {
                 formatAssigneeTriggerForLog());
     }
 
-    // Se a categoria bate ou o designado também, envia ao Taiga :)
+    /**
+     * Avalia se o ticket atende aos critérios mínimos de envio (categoria ou técnico atribuído).
+     */
     private boolean shouldSendTicketToTaiga(GlpiItem item) {
         return categoryMatches(item) || assigneeMatches(item);
     }
 
+    /**
+     * Valida se a categoria do ticket coincide com o wildcard ou regra explícita configurada.
+     */
     private boolean categoryMatches(GlpiItem item) {
         if (categoryThatSendToTaiga == null) {
             return false;
@@ -120,6 +144,9 @@ public class IntegrationService {
         return itemCategory.equalsIgnoreCase(configCategory);
     }
 
+    /**
+     * Varre os membros atribuídos ao ticket buscando correspondência com o técnico alvo configurado.
+     */
     private boolean assigneeMatches(GlpiItem item) {
         if (assigneeThatSendToTaiga == null) {
             return false;
@@ -162,6 +189,9 @@ public class IntegrationService {
         return false;
     }
 
+    /**
+     * Verifica se o membro da equipe possui o papel explícito de atribuído ("assigned").
+     */
     private boolean isAssignedMember(GlpiTeamMember member) {
         if (member == null) {
             return false;
@@ -174,6 +204,9 @@ public class IntegrationService {
         return "assigned".equalsIgnoreCase(member.role().trim());
     }
 
+    /**
+     * Compara strings limpando espaços e ignorando maiúsculas/minúsculas.
+     */
     private boolean matchesAssignee(String value, String wantedAssignee) {
         if (value == null) {
             return false;
@@ -182,6 +215,9 @@ public class IntegrationService {
         return wantedAssignee.equalsIgnoreCase(value.trim());
     }
 
+    /**
+     * Formata o gatilho de categoria para exibição limpa no log.
+     */
     private String formatCategoryTriggerForLog() {
         if (categoryThatSendToTaiga == null) {
             return "(desativado)";
@@ -196,6 +232,9 @@ public class IntegrationService {
         return "'" + value + "'";
     }
 
+    /**
+     * Formata o gatilho de técnico atribuído para exibição limpa no log.
+     */
     private String formatAssigneeTriggerForLog() {
         if (assigneeThatSendToTaiga == null) {
             return "(desativado)";
@@ -210,6 +249,10 @@ public class IntegrationService {
         return "'" + value + "'";
     }
 
+    /**
+     * Core do processamento do webhook GLPI. Inicializa sessão, valida duplicidade,
+     * roteia o projeto, cria a issue no Taiga e atualiza os campos customizados do GLPI.
+     */
     private void doProcessGlpiWebhook(GlpiItem item, Long ticketId) {
         String sessionToken = glpiIntegrationService.initSession();
 
@@ -258,6 +301,9 @@ public class IntegrationService {
                 taigaIssue.id());
     }
 
+    /**
+     * Verifica se o ticket já possui um ID externo válido atrelado no plugin de campos do GLPI.
+     */
     private boolean ticketAlreadyIntegrated(
             Optional<GlpiPluginFieldsRecord> record,
             Long ticketId) {
@@ -286,6 +332,12 @@ public class IntegrationService {
 
     // Taiga
 
+    /**
+     * Processa payloads vindos do webhook do Taiga.
+     * Filtra e redireciona eventos legítimos de modificação em Issues ou User Stories.
+     *
+     * @param payload Evento disparado pelo Taiga.
+     */
     public void processTaigaWebhook(TaigaWebhookPayload payload) {
         if ("create".equals(payload.action()) && "issue".equals(payload.type())) {
             return;
@@ -304,6 +356,9 @@ public class IntegrationService {
         }
     }
 
+    /**
+     * Encaminha eventos relacionados estritamente a Issues do Taiga (atualização ou promoção).
+     */
     private void processTaigaIssueEvent(TaigaWebhookPayload payload, TaigaIssueData data) {
 
         if (isPromotionEvent(payload)) {
@@ -326,6 +381,9 @@ public class IntegrationService {
         });
     }
 
+    /**
+     * Trata o subevento de conversão/promoção de uma Issue para User Story dentro do Taiga.
+     */
     private void processPromotionEvent(
             TaigaWebhookPayload payload,
             TaigaIssueData data) {
@@ -354,12 +412,18 @@ public class IntegrationService {
         });
     }
 
+    /**
+     * Valida a estrutura interna do payload do Taiga para identificar mutação de promoção.
+     */
     private boolean isPromotionEvent(TaigaWebhookPayload payload) {
         return payload.change() != null
                 && payload.change().diff() != null
                 && payload.change().diff().promotedTo() != null;
     }
 
+    /**
+     * Extrai a diferença estrutural (diff) para encontrar o ID resultante da User Story promovida.
+     */
     private Long extractNewUserStoryId(TaigaWebhookPayload payload) {
 
         TaigaPromotedToChange promotedTo =
@@ -384,6 +448,9 @@ public class IntegrationService {
         return null;
     }
 
+    /**
+     * Executa a sincronização do GLPI quando uma Issue vira User Story, buscando o novo status e data alvo.
+     */
     private void doHandleIssuePromotion(Long issueId, Long userStoryId) {
         String sessionToken = glpiIntegrationService.initSession();
         String taigaToken = taigaIntegrationService.authenticateInTaiga();
@@ -417,10 +484,13 @@ public class IntegrationService {
         }
 
         glpiIntegrationService.syncExternalProgress(ticketId, statusNome, dataPrevista, sessionToken);
-        log.info("TAIGA - Ticket {} atualizado via promoção: história={}, status='{}', dataPrevista={}.",
+        log.info("TAIGA - Ticket {} updated via promoção: história={}, status='{}', dataPrevista={}.",
                 ticketId, userStoryId, statusNome, dataPrevista);
     }
 
+    /**
+     * Atualiza o progresso externo no GLPI com base nas alterações sofridas pela Issue original no Taiga.
+     */
     private void doProcessTaigaIssueUpdate(TaigaIssueData issue) {
 
         if (issue.promotedTo() != null && !issue.promotedTo().isEmpty()) {
@@ -511,6 +581,9 @@ public class IntegrationService {
                 dataPrevista);
     }
 
+    /**
+     * Valida e inicia o tratamento de webhooks associados a User Stories independentes no Taiga.
+     */
     private void processTaigaUserStoryEvent(TaigaIssueData data) {
 
         if (data.id() == null || data.generatedFromIssue() == null) {
@@ -535,6 +608,9 @@ public class IntegrationService {
         });
     }
 
+    /**
+     * Executa a atualização do GLPI com base em alterações na User Story associada.
+     */
     private void doProcessUserStoryUpdate(TaigaIssueData us) {
 
         String sessionToken =
@@ -556,28 +632,32 @@ public class IntegrationService {
         }
 
         Long ticketId = glpiTicketId.get();
-        String statusNome = us.status().name();
+        String statusName = us.status().name();
 
-        String dataPrevista = null;
+        String expectedDate = null;
 
         if (us.dueDate() != null) {
-            dataPrevista = us.dueDate().split("T")[0];
+            expectedDate = us.dueDate().split("T")[0];
         }
 
         glpiIntegrationService.syncExternalProgress(
                 ticketId,
-                statusNome,
-                dataPrevista,
+                statusName,
+                expectedDate,
                 sessionToken);
 
         log.info(
-                "TAIGA - Ticket {} atualizado via história {}: status='{}', dataPrevista={}.",
+                "TAIGA - Ticket {} atualizado via história {}: status='{}', expectedDate={}.",
                 ticketId,
                 us.id(),
-                statusNome,
-                dataPrevista);
+                statusName,
+                expectedDate);
     }
 
+    /**
+     * Mecanismo de execução resiliente que intercepta falhas de autenticação
+     * e dispara novas tentativas baseadas no limite máximo configurado.
+     */
     private void withAuthRetry(Runnable action) {
 
         IntegrationAuthenticationException lastException = null;
