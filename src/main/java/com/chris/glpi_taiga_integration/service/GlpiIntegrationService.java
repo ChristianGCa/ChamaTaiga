@@ -54,12 +54,14 @@ public class GlpiIntegrationService {
         this.cacheManager = cacheManager;
         this.pluginFieldsProperties = pluginFieldsProperties;
     }
+    /**
+    * O GLPI gera o endpoint do plugin Fields a partir do nome do bloco.
+    * Ele remove acentos, espaços e especiais.
+    * Exemplos:
+    * "Taiga" - /PluginFieldsTickettaiga
+    * "Progresso do chamado" - /PluginFieldsTicketprogressodochamado
+     */
 
-    // O GLPI gera o endpoint do plugin Fields a partir do nome do bloco.
-    // Ele remove acentos, espaços e especiais.
-    // Exemplos:
-    // "Taiga" - /PluginFieldsTickettaiga
-    // "Progresso do chamado" - /PluginFieldsTicketprogressodochamado
     private String buildPluginPathNormalized(String blockName) {
         // GLPI descarta caracteres não-ASCII.
         String sanitized = blockName
@@ -68,15 +70,24 @@ public class GlpiIntegrationService {
         return "/PluginFieldsTicket" + sanitized;
     }
 
+    /**
+     * Retorna a lista de caminhos prováveis para o endpoint do plugin.
+     */
     private List<String> buildPluginPathCandidates(String blockName) {
         return List.of(buildPluginPathNormalized(blockName));
     }
 
+    /**
+     * Identifica se o erro retornado pelo GLPI indica que o recurso/bloco não existe.
+     */
     private boolean isResourceNotFound(RestClientResponseException e) {
         String response = e.getResponseBodyAsString();
         return e.getStatusCode().is4xxClientError() && response.contains("ERROR_RESOURCE_NOT_FOUND_NOR_COMMONDBTM");
     }
 
+    /**
+     * Constrói mensagem detalhada de diagnóstico para falhas de mapeamento do plugin Fields.
+     */
     private String pluginFieldsDiagnosticMessage(String blockName, List<String> triedPaths) {
         return "Falha ao localizar bloco do plugin Fields no GLPI. "
                 + "Bloco configurado='" + blockName + "', "
@@ -92,6 +103,12 @@ public class GlpiIntegrationService {
 
     // Operações genéricas de CRUD no plugin Fields
 
+    /**
+     * Busca registros paginados de um bloco específico no plugin Fields.
+     * Tenta os caminhos candidatos antes de falhar.
+     *
+     * @throws GlpiPluginFieldsException se o recurso não for mapeado ou a API falhar.
+     */
     private List<Map<String, Object>> fetchPluginRecords(
             String blockName, String sessionToken, int offset, int limit, String operationLabel) {
         List<String> triedPaths = new ArrayList<>();
@@ -127,6 +144,9 @@ public class GlpiIntegrationService {
         throw new GlpiPluginFieldsException(pluginFieldsDiagnosticMessage(blockName, triedPaths), lastException);
     }
 
+    /**
+     * Insere um novo registro em um bloco do plugin Fields.
+     */
     private void createPluginRecord(String blockName, Map<String, Object> body, String sessionToken, String operationLabel) {
         List<String> triedPaths = new ArrayList<>();
         RestClientResponseException lastException = null;
@@ -161,6 +181,9 @@ public class GlpiIntegrationService {
         throw new GlpiPluginFieldsException(pluginFieldsDiagnosticMessage(blockName, triedPaths), lastException);
     }
 
+    /**
+     * Atualiza um registro existente em um bloco do plugin Fields via método PUT.
+     */
     private void updatePluginRecord(String blockName, Long recordId, Map<String, Object> body, String sessionToken, String operationLabel) {
         List<String> triedPaths = new ArrayList<>();
         RestClientResponseException lastException = null;
@@ -197,6 +220,11 @@ public class GlpiIntegrationService {
 
     // Sessão do GLPI
 
+    /**
+     * Inicializa uma sessão na API do GLPI e armazena o token resultante em cache.
+     *
+     * @return String contendo o token da sessão ativa.
+     */
     @Cacheable(value = GLPI_SESSION_CACHE, key = CACHE_KEY)
     public String initSession() {
         log.info("GLPI SERVICE - Iniciando nova sessão no GLPI...");
@@ -215,6 +243,9 @@ public class GlpiIntegrationService {
         return sessionResponse.sessionToken();
     }
 
+    /**
+     * Remove o token de sessão do cache local da aplicação.
+     */
     public void invalidateGlpiSession() {
         Optional.ofNullable(cacheManager.getCache(GLPI_SESSION_CACHE))
                 .ifPresent(cache -> {
@@ -223,6 +254,9 @@ public class GlpiIntegrationService {
                 });
     }
 
+    /**
+     * Encerra a sessão ativa no servidor do GLPI e limpa o cache local.
+     */
     public void closeGlpiSession(String sessionToken) {
         log.info("GLPI SERVICE - Encerrando sessão GLPI no servidor...");
         try {
@@ -240,6 +274,10 @@ public class GlpiIntegrationService {
         }
     }
 
+    /**
+     * Hook executado no encerramento da aplicação para derrubar a sessão ativa no GLPI,
+     * evitando vazamento de conexões abertas no servidor remoto.
+     */
     @PreDestroy
     public void onShutdown() {
         log.info("GLPI SERVICE - Shutdown detectado. Encerrando sessão GLPI...");
@@ -253,6 +291,10 @@ public class GlpiIntegrationService {
 
     // Bloco privado (ID da Issue no Taiga e Link)
 
+    /**
+     * Varre paginado o bloco privado do Taiga para localizar o registro vinculado ao ticket informado.
+     * Atenção: Filtro executado em memória.
+     */
     public Optional<GlpiPluginFieldsRecord> getPluginFieldsRecord(
             Long ticketId,
             String sessionToken) {
@@ -299,6 +341,10 @@ public class GlpiIntegrationService {
         }
     }
 
+    /**
+     * Orquestra a sincronização do ticket: atualiza o core do GLPI com o ID da issue do Taiga
+     * e insere ou altera o registro correspondente no plugin Fields.
+     */
     public void updateGlpiTicket(Long ticketId, Long taigaIssueId, String taigaIssueUrl, String sessionToken) {
         log.info("GLPI SERVICE - Atualizando chamado no GLPI (ticket={})...", ticketId);
         updateGlpiTaigaId(ticketId, taigaIssueId, sessionToken);
@@ -311,6 +357,9 @@ public class GlpiIntegrationService {
         }
     }
 
+    /**
+     * Atualiza o campo customizado nativo ou mapeado no payload do Ticket principal do GLPI.
+     */
     public void updateGlpiTaigaId(Long ticketId, Long taigaIssueId, String sessionToken) {
         log.info("GLPI SERVICE - Atualizando campo ID Taiga no ticket {}...", ticketId);
         restClient.put()
@@ -323,6 +372,10 @@ public class GlpiIntegrationService {
                 .toBodilessEntity();
     }
 
+    /**
+     * Localiza o ID de um Ticket do GLPI a partir do ID da Issue do Taiga gravado no bloco do plugin.
+     * Executa varredura paginada com filtro em memória.
+     */
     public Optional<Long> getTicketByIdTaiga(Long taigaIssueId, String sessionToken) {
         log.info("GLPI SERVICE - Buscando chamado pelo campo {}={} (com paginação).",
                 pluginFieldsProperties.privateIdTaigaApiField(), taigaIssueId);
@@ -381,6 +434,9 @@ public class GlpiIntegrationService {
 
     // Bloco público (Status do chamado e Data de conclusão prevista)
 
+    /**
+     * Recupera dados do bloco público "Progresso do chamado" associados ao ticket. Varredura paginada em memória.
+     */
     public Optional<GlpiPluginFieldsRecord> getExternalProgressRecord(Long ticketId, String sessionToken) {
         log.info("GLPI SERVICE - Buscando registro Progresso do chamado para ticket {}.", ticketId);
         String blockName = pluginFieldsProperties.getPublicTicketStatusBlockName();
@@ -443,9 +499,7 @@ public class GlpiIntegrationService {
     }
 
     /**
-     * Cria ou atualiza o bloco "Progresso do chamado".
-     *
-     * @param dataPrevista data no formato aceito pelo GLPI (ex.: "2024-12-31"); pode ser null.
+     * Executa o Upsert (Cria ou Atualiza) dos indicadores públicos de progresso do chamado vindos do Taiga.
      */
     public void syncExternalProgress(Long ticketId, String status, String dataPrevista, String sessionToken) {
         Optional<GlpiPluginFieldsRecord> record = getExternalProgressRecord(ticketId, sessionToken);
@@ -462,6 +516,9 @@ public class GlpiIntegrationService {
 
     // Tickets e Entidades
 
+    /**
+     * Busca o ID da Entidade associada ao ticket para validações de escopo de permissões.
+     */
     public Optional<Long> getTicketEntityId(Long ticketId, String sessionToken) {
         GlpiTicketResponse ticket = restClient.get()
                 .uri(glpiApiUrl + "/Ticket/" + ticketId)
@@ -473,6 +530,9 @@ public class GlpiIntegrationService {
         return ticket == null ? Optional.empty() : Optional.ofNullable(ticket.entitiesId());
     }
 
+    /**
+     * Busca os metadados de uma Entidade do GLPI.
+     */
     public Optional<GlpiEntityResponse> getEntityById(Long entityId, String sessionToken) {
         if (entityId == null) return Optional.empty();
 
@@ -505,8 +565,7 @@ public class GlpiIntegrationService {
     // Montagem dos corpos das requisições
 
     /**
-     * Corpo do POST/PUT para o bloco "Taiga".
-     * Campos: items_id, itemtype, {idTaigaField}, {linkTaigaField}
+     * Monta o padrão JSON aninhado ("input": { ... }) exigido pela API do GLPI para o bloco Taiga.
      */
     private Map<String, Object> buildPrivatePluginFieldsBody(Long ticketId, Long taigaIssueId, String taigaIssueUrl) {
         Map<String, Object> input = new HashMap<>();
@@ -518,9 +577,8 @@ public class GlpiIntegrationService {
     }
 
     /**
-     * Corpo do POST/PUT para o bloco "Progresso do chamado".
-     * Campos: items_id, itemtype, {statusChamadoField}[, {dataPrevistaField}]
-     * dataPrevista é opcional — não é incluído no body quando null ou vazio.
+     * Monta o padrão JSON aninhado para o bloco de Progresso Público.
+     * Converte o formato da data antes da inserção se aplicável.
      */
     private Map<String, Object> buildPublicPluginFieldsBody(Long ticketId, String status, String dataPrevista) {
         Map<String, Object> input = new HashMap<>();
@@ -534,8 +592,8 @@ public class GlpiIntegrationService {
     }
 
     /**
-     * Converte data de "YYYY-MM-DD" (formato Taiga) para "DD/MM/YYYY" (formato esperado pelo GLPI Plugin Fields).
-     * Se a entrada não estiver no formato esperado, retorna o valor original sem alteração.
+     * Converte data ISO do Taiga ("YYYY-MM-DD") para o formato PT-BR exigido pelo Plugin Fields do GLPI ("DD/MM/YYYY").
+     * Fallback: Se falhar no regex, retorna a string original intacta.
      */
     private static String toGlpiDateFormat(String isoDate) {
         if (isoDate == null || !isoDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
