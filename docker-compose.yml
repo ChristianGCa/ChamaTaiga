@@ -1,0 +1,17 @@
+services:
+  middleware:
+    build: .
+    image: glpi-taiga-middleware:latest
+    container_name: glpi-taiga-middleware
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./certs:/app/certs:ro
+      # Este arquivo SOBRESCREVE o yaml embutido no JAR
+      - ./config/application.yaml:/app/config/application.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
